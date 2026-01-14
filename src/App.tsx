@@ -51,7 +51,12 @@ interface GraphEdge {
   color: string
 }
 
-function toGraph(doc: RecourseDocument): { nodes: GraphNode[]; edges: GraphEdge[] } {
+interface CommandGroup {
+  command: string
+  utterances: { id: string; text: string; targetClaimId?: string }[]
+}
+
+function toGraph(doc: RecourseDocument): { nodes: GraphNode[]; edges: GraphEdge[]; commandGroups: CommandGroup[] } {
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
   
@@ -60,18 +65,61 @@ function toGraph(doc: RecourseDocument): { nodes: GraphNode[]; edges: GraphEdge[
     CHALLENGE: '#ef4444',
     SUPPORT: '#22c55e',
     AMEND: '#f59e0b',
+    QUESTION: '#a855f7',
   }
 
+  // Group by command type
+  const groupedByCommand: Record<string, CommandGroup> = {}
+
+  // Add claims as PROPOSE commands
   for (const claim of doc.claims) {
+    if (!groupedByCommand['PROPOSE']) {
+      groupedByCommand['PROPOSE'] = { command: 'PROPOSE', utterances: [] }
+    }
+    groupedByCommand['PROPOSE'].utterances.push({
+      id: claim.id,
+      text: claim.statement,
+    })
+    
     nodes.push({
       id: claim.id,
       type: 'claim',
       label: claim.statement.slice(0, 50) + (claim.statement.length > 50 ? '...' : ''),
+      command: 'PROPOSE',
     })
   }
 
+  // Group recourses by command
   for (const recourse of doc.recourses) {
-    const command = (recourse as any).command || (recourse as any).type || 'UNKNOWN'
+    const command = recourse.command || 'UNKNOWN'
+    
+    if (!groupedByCommand[command]) {
+      groupedByCommand[command] = { command, utterances: [] }
+    }
+    
+    // Get the utterance text from reasons, proposedStatement, or questions
+    let utteranceText = ''
+    if (recourse.proposedStatement) {
+      utteranceText = recourse.proposedStatement
+    } else if (recourse.reasons && recourse.reasons.length > 0) {
+      utteranceText = recourse.reasons.map(r => r.text).join('; ')
+    } else if (recourse.questions && recourse.questions.length > 0) {
+      utteranceText = recourse.questions.map(q => q.text).join('; ')
+    }
+    
+    groupedByCommand[command].utterances.push({
+      id: recourse.id,
+      text: utteranceText,
+      targetClaimId: recourse.targetClaimId,
+    })
+
+    nodes.push({
+      id: recourse.id,
+      type: 'recourse',
+      label: utteranceText.slice(0, 50) + (utteranceText.length > 50 ? '...' : ''),
+      command,
+    })
+
     if (recourse.targetClaimId) {
       edges.push({
         source: recourse.id,
@@ -79,16 +127,12 @@ function toGraph(doc: RecourseDocument): { nodes: GraphNode[]; edges: GraphEdge[
         type: command,
         color: colorMap[command] || '#6b7280',
       })
-      nodes.push({
-        id: recourse.id,
-        type: 'recourse',
-        label: command,
-        command,
-      })
     }
   }
 
-  return { nodes, edges }
+  const commandGroups = Object.values(groupedByCommand)
+
+  return { nodes, edges, commandGroups }
 }
 
 function getAmendCount(doc: RecourseDocument, claimId: string): number {
@@ -147,59 +191,56 @@ AMEND claim ("claim-abc-123") {
   because ("A pilot program would limit initial cost and allow us to gather data.")
 }`
   },
-  {
-    id: 'ai-deliberation',
-    title: 'AI Deliberation',
-    desc: 'AI-generated discourse',
-    code: `// Human proposes initial claim
-PROPOSE claim ("AI systems should be open source by default.") {
-  because ("Transparency enables safety auditing and reduces black-box risks.")
-  sources ["https://ai-safety.org/transparency-report"]
-  tags [ai, policy, safety]
+   {
+     id: 'ai-safety-panel',
+     title: 'AI Safety Panel',
+     desc: 'Real deliberation on AI risks',
+     code: `PROPOSE claim ("AI systems should be regulated internationally to ensure safety.") {
+   because ("AI poses existential risks if not properly controlled.")
+   sources ["https://futureoflife.org"]
+   tags [ai, safety, regulation]
 }
 
-// AI Agent analyzes and generates challenge
-CHALLENGE claim ("claim-ai-001") {
-  because ("Open sourcing advanced AI models could enable malicious actors.")
-  because ("Proprietary models fund research through commercial incentives.")
-  sources ["https://security-research.com/ai-risks"]
-  question ("How do we balance transparency with security concerns?")
+CHALLENGE claim ("claim-ai-safety-001") {
+   because ("International regulation may hinder innovation.")
+   question ("Who would enforce these regulations?")
 }
 
-// AI Agent identifies synthesis opportunity
-AMEND claim ("claim-ai-001") {
-  propose ("AI systems above certain capability thresholds should require audited transparency reports rather than full open source.")
-  because ("This balances safety oversight with security concerns.")
-  because ("Tiered approach allows innovation while protecting against misuse.")
+SUPPORT claim ("claim-ai-safety-001") {
+   because ("Unregulated AI development could lead to catastrophic outcomes.")
+   sources ["https://ai-risks.org"]
 }
 
-// AI generates evidence summary
-SUPPORT claim ("claim-ai-001") {
-  because ("Academic research shows 73% of AI incidents involved proprietary systems with no external review.")
-  sources ["https://ai-incident-database.org/2024-report"]
+AMEND claim ("claim-ai-safety-001") {
+   propose ("Implement tiered safety standards based on AI capability levels.")
+   because ("High-risk AI needs strict oversight while allowing innovation in lower-risk areas.")
 }`
-  },
-  {
-    id: 'remote-work',
-    title: 'Remote Work',
-    desc: 'Workplace debate',
-    code: `PROPOSE claim ("Companies should adopt permanent remote work policies.") {
-  because ("Remote work increases employee productivity by 13%.")
-  sources ["https://stanford.edu/remote-work-study"]
-  because ("It reduces office overhead costs significantly.")
-  tags [workplace, productivity, cost]
+   },
+   {
+     id: 'misinformation-summit',
+     title: 'Misinformation Summit',
+     desc: 'Nobel deliberation on truth and trust',
+     code: `PROPOSE claim ("Misinformation undermines trust in society.") {
+   because ("It erodes social cohesion and hinders evidence-based decision making.")
+   sources ["https://nobelprize.org/summit"]
+   tags [misinformation, trust, society]
 }
 
-SUPPORT claim ("claim-remote-001") {
-  because ("Employee satisfaction surveys show 78% prefer remote options.")
-  sources ["https://hr-survey-2024.com/results"]
+CHALLENGE claim ("claim-misinfo-001") {
+   because ("Distinguishing misinformation from legitimate debate is difficult.")
+   question ("How do we define misinformation without stifling free speech?")
 }
 
-CHALLENGE claim ("claim-remote-001") {
-  because ("Team collaboration suffers without in-person interaction.")
-  question ("How do we maintain company culture remotely?")
+SUPPORT claim ("claim-misinfo-001") {
+   because ("Systematic efforts to spread false information threaten democracy.")
+   sources ["https://undp.org/ivify"]
+}
+
+AMEND claim ("claim-misinfo-001") {
+   propose ("Build trust through verified fact-checking and media literacy education.")
+   because ("Combining technology with education addresses root causes of misinformation.")
 }`
-  },
+   },
   {
     id: 'ai-regulation',
     title: 'AI Regulation',
@@ -402,6 +443,7 @@ function App() {
   return (
     <div className="container">
       <div className="hero">
+       
         <h1 className="hero-title">
           <span className="white">Recourse</span>{' '}
           <span className="gray">Language</span>
@@ -486,16 +528,16 @@ function App() {
           ) : graph && (
             <>
               <div className="graph-legend">
-                <span className="legend-item"><span className="dot" style={{background: '#3b82f6'}}></span>CLAIM</span>
+                <span className="legend-item"><span className="dot" style={{background: '#3b82f6'}}></span>PROPOSE</span>
                 <span className="legend-item"><span className="dot" style={{background: '#ef4444'}}></span>CHALLENGE</span>
                 <span className="legend-item"><span className="dot" style={{background: '#22c55e'}}></span>SUPPORT</span>
                 <span className="legend-item"><span className="dot" style={{background: '#f59e0b'}}></span>AMEND</span>
                 <span className="legend-item"><span className="dot" style={{background: '#a855f7'}}></span>QUESTION</span>
               </div>
-              <GraphView nodes={graph.nodes} edges={graph.edges} />
+              <GraphView nodes={graph.nodes} edges={graph.edges} commandGroups={graph.commandGroups} />
               <div className="graph-stats">
-                <span>{graph.nodes.filter(n => n.type === 'claim').length} claims</span>
-                <span>{graph.nodes.filter(n => n.type === 'recourse').length} recourses</span>
+                <span>{graph.commandGroups.length} command types</span>
+                <span>{graph.nodes.length} utterances</span>
                 <span>{graph.edges.length} connections</span>
               </div>
             </>
